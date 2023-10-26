@@ -9,7 +9,7 @@ defmodule RetryTest do
   defmodule(CustomError, do: defexception(message: "custom error!"))
 
   describe "retry" do
-    defp boom, do: raise "boom"
+    defp boom, do: raise("boom")
 
     test "keeps correct stack trace" do
       e =
@@ -220,6 +220,36 @@ defmodule RetryTest do
         end)
 
       assert round(elapsed / 1_000) in 425..450
+    end
+
+    test "each_else never executes on pass" do
+      retry with: [1, 1], on_each_fail: fn _e, _index -> raise "boom" end do
+        :ok
+      end
+    end
+
+    test "each_else executes for each fail" do
+      on_each_fail = fn e, index ->
+        send(self(), {:each_else, e, index})
+      end
+
+      retry with: [1, 1], on_each_fail: on_each_fail do
+        :error
+      end
+
+      assert [
+               {:each_else, :error, 2},
+               {:each_else, :error, 1},
+               {:each_else, :error, 0}
+             ] == received_messages()
+    end
+
+    defp received_messages(messages \\ []) do
+      receive do
+        message -> received_messages([message | messages])
+      after
+        0 -> messages
+      end
     end
 
     test "with invalid clauses raises argument error" do

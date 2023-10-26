@@ -35,7 +35,7 @@ defmodule Retry do
   @retry_meta %{
     options: %{
       required: [:with],
-      allowed: [:with, :atoms, :rescue_only],
+      allowed: [:with, :atoms, :rescue_only, :on_each_fail],
       default: [
         atoms: [:error],
         rescue_only: [RuntimeError]
@@ -152,14 +152,27 @@ defmodule Retry do
     [do_clause, after_clause, else_clause] = parse_clauses(clauses, @retry_meta)
     stream_builder = Keyword.fetch!(opts, :with)
     atoms = Keyword.fetch!(opts, :atoms)
+    on_each_fail = Keyword.get(opts, :on_each_fail, nil)
 
     quote generated: true do
       fun = unquote(block_runner(do_clause, opts))
+      on_each_fail = unquote(on_each_fail)
 
       unquote(delays_from(stream_builder))
-      |> Enum.reduce_while(nil, fn delay, _last_result ->
+      |> Stream.with_index()
+      |> Enum.reduce_while(nil, fn {delay, index}, _last_result ->
         :timer.sleep(delay)
-        fun.()
+        result = fun.()
+
+        if on_each_fail do
+          case result do
+            {:halt, _} -> nil
+            {:cont, {:exception, e, stacktrace}} -> on_each_fail.({e, stacktrace}, index)
+            {:cont, e} -> on_each_fail.(e, index)
+          end
+        end
+
+        result
       end)
       |> case do
         {:exception, e, stacktrace} ->
